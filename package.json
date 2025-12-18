@@ -1,0 +1,40 @@
+{
+  "name": "biar-api",
+  "version": "1.0.0",
+  "description": "BIAR Document Processing API with CouchDB, Apache Tika, and Solr",
+  "main": "dist/job.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && node dist/job.js",
+    "dev": "ts-node src/job.ts",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts --fix"
+  },
+  "dependencies": {
+    "@tazama-lf/frms-coe-lib": "^6.0.0",
+    "@types/cron": "^2.0.1",
+    "axios": "^1.6.0",
+    "cron": "^4.4.0",
+    "dotenv": "^17.2.3",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.6",
+    "@types/node": "^20.8.7",
+    "@typescript-eslint/eslint-plugin": "^6.9.0",
+    "@typescript-eslint/parser": "^6.9.0",
+    "eslint": "^8.52.0",
+    "jest": "^29.7.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2"
+  },
+  "keywords": [
+    "api",
+    "document",
+    "processing",
+    "fastify",
+    "typescript"
+  ],
+  "author": "BIAR Team",
+  "license": "MIT"
+}

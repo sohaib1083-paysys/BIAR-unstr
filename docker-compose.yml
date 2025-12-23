@@ -1,17 +1,4 @@
 services:
-  couchdb:
-    image: couchdb:3.3
-    container_name: biar-couchdb
-    restart: unless-stopped
-    ports:
-      - "5984:5984"
-    environment:
-      COUCHDB_USER: admin
-      COUCHDB_PASSWORD: password
-    volumes:
-      - couchdb_data:/opt/couchdb/data
-    networks:
-      - biar-network
 
   tika:
     image: logicalspark/docker-tikaserver:latest
@@ -58,59 +45,10 @@ services:
     networks:
       - biar-network
 
-  minio:
-    image: minio/minio:latest
-    container_name: biar-minio
-    command: server /data --console-address ":9001"
-    restart: unless-stopped
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web UI
-    environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123
-    volumes:
-      - minio_data:/data
-    networks:
-      - biar-network    
-
-
-  ozone:
-    image: apache/ozone:1.4.0
-    container_name: biar-ozone
-    hostname: ozone
-    restart: unless-stopped
-    ports:
-      - "9862:9862"   # SCM
-      - "9876:9876"   # OM
-      - "9878:9878"   # S3 Gateway
-    volumes:
-      - ozone_data:/data/ozone
-    environment:
-      OZONE_SCM_NAMES: ozone
-      OZONE_OM_ADDRESS: ozone
-      OZONE_S3G_ADDRESS: ozone
-    command: >
-      bash -c "
-      ozone scm --init &&
-      ozone scm &
-      sleep 5 &&
-      ozone om &
-      sleep 5 &&
-      ozone datanode &
-      sleep 5 &&
-      ozone s3g &&
-      tail -f /dev/null
-      "
-    networks:
-      - biar-network
 
 volumes:
-  couchdb_data:
   solr_data:
   nifi_data:
-  ozone_data:
-  minio_data:
 
 networks:
   biar-network:

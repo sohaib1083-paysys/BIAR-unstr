@@ -44,7 +44,8 @@ services:
     container_name: biar-nifi
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8080:8080"     # NiFi UI
+      - "8081:8081"   # ListenHTTP (Tika → NiFi)
     environment:
       NIFI_WEB_HTTP_PORT: 8080
       NIFI_WEB_HTTP_HOST: 0.0.0.0
@@ -57,28 +58,50 @@ services:
     networks:
       - biar-network
 
+  minio:
+    image: minio/minio:latest
+    container_name: biar-minio
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web UI
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio_data:/data
+    networks:
+      - biar-network    
+
+
   ozone:
     image: apache/ozone:1.4.0
     container_name: biar-ozone
+    hostname: ozone
     restart: unless-stopped
     ports:
-      - "9878:9878"  # Ozone Manager HTTP
-      - "9862:9862"  # Storage Container Manager HTTP
-      - "9864:9864"  # Datanode HTTP
-    environment:
-      ENSURE_OZONE_INITIALIZED: "yes"
-    command: 
-      - /bin/bash
-      - -c
-      - |
-        echo "Starting Ozone in standalone mode..."
-        # Just start basic Ozone services without complex initialization
-        mkdir -p /data/ozone
-        echo "Ozone storage ready at /data/ozone"
-        # Keep container running
-        tail -f /dev/null
+      - "9862:9862"   # SCM
+      - "9876:9876"   # OM
+      - "9878:9878"   # S3 Gateway
     volumes:
       - ozone_data:/data/ozone
+    environment:
+      OZONE_SCM_NAMES: ozone
+      OZONE_OM_ADDRESS: ozone
+      OZONE_S3G_ADDRESS: ozone
+    command: >
+      bash -c "
+      ozone scm --init &&
+      ozone scm &
+      sleep 5 &&
+      ozone om &
+      sleep 5 &&
+      ozone datanode &
+      sleep 5 &&
+      ozone s3g &&
+      tail -f /dev/null
+      "
     networks:
       - biar-network
 
@@ -87,6 +110,7 @@ volumes:
   solr_data:
   nifi_data:
   ozone_data:
+  minio_data:
 
 networks:
   biar-network:

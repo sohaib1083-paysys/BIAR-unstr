@@ -18,9 +18,6 @@ class DocumentProcessor {
     TIKA_URL: string;
     SOLR_URL: string;
     NIFI_URL: string;
-    OZONE_URL: string;
-    OZONE_VOLUME: string;
-    OZONE_BUCKET: string;
   };
 
   constructor() {
@@ -33,10 +30,7 @@ class DocumentProcessor {
       COUCHDB_URL: process.env.COUCHDB_URL || 'http://admin:password@localhost:5984',
       TIKA_URL: process.env.TIKA_URL || 'http://localhost:9998',
       SOLR_URL: process.env.SOLR_URL || 'http://localhost:8983/solr/biar_docs',
-      NIFI_URL: process.env.NIFI_URL || 'http://localhost:8080',
-      OZONE_URL: process.env.OZONE_URL || 'http://localhost:9878',
-      OZONE_VOLUME: process.env.OZONE_VOLUME || 's3v',
-      OZONE_BUCKET: process.env.OZONE_BUCKET || 'biar'
+      NIFI_URL: process.env.NIFI_URL || 'http://localhost:8081',
     };
   }
 
@@ -69,7 +63,11 @@ class DocumentProcessor {
     
     return response.data.rows
       .map((row: any) => row.doc)
-      .filter((doc: any) => doc._attachments && Object.keys(doc._attachments).length > 0);
+      .filter((doc: any) => {
+        const hasAttachments = doc._attachments && Object.keys(doc._attachments).length > 0 && doc.statuses?.processingStatus != 'COMPLETED';
+        
+        return hasAttachments;
+      });
   }
 
   private async processDocument(doc: any): Promise<DocumentResult> {
@@ -86,10 +84,19 @@ class DocumentProcessor {
       // this.logger.log('The text is ', text)
       // this.logger.log('The metadata is ', metadata)
 
-
+      
       await this.indexInSolr(doc, text, metadata);
-      await this.sendToNifi(doc, text, metadata);
-      await this.storeInOzone(doc, text, metadata);
+
+      await this.sendToNiFi({
+        documentId,
+        caseId: doc.CaseId || doc.caseId,
+        filename: attachmentName,
+        content: text,
+        metadata,
+        extractedAt: new Date().toISOString()
+      });
+
+
       
       await this.updateDocumentStatus(documentId, 'COMPLETED');
       
@@ -130,6 +137,26 @@ class DocumentProcessor {
     return response.data;
   }
 
+  private async sendToNiFi(payload: any): Promise<void> {
+    this.logger.log("The payload being sent is: ", payload)
+    await axios.post(
+      `${this.config.NIFI_URL}/contentListener`,
+      payload,
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      }
+  );
+
+  this.logger.log(
+    `Sent document ${payload.documentId} to NiFi`,
+    'sendToNiFi'
+  );
+}
+
+
   private async indexInSolr(doc: any, extractedText: string, metadata: any): Promise<void> {
     const solrDoc = {
       id: doc._id,
@@ -144,6 +171,7 @@ class DocumentProcessor {
       processingStatus: 'INDEXED'
     };
 
+
     await axios.post(
       `${this.config.SOLR_URL}/update/json/docs?commit=true`,
       [solrDoc],
@@ -153,117 +181,15 @@ class DocumentProcessor {
     this.logger.log(`Indexed document ${doc._id} in Solr`, 'indexInSolr');
   }
 
-  private async sendToNifi(doc: any, extractedText: string, metadata: any): Promise<void> {
-    const payload = {
-      documentId: doc._id,
-      caseId: doc.CaseId || doc.caseId,
-      taskId: doc.TaskId || doc.taskId,
-      name: doc.Name || doc.name,
-      extractedText,
-      metadata,
-      processedAt: new Date().toISOString(),
-      source: 'biar-document-processor'
-    };
-
-    try {
-      // Write file directly to NIFI's monitored directory
-      const fs = require('fs');
-      const fileName = `biar_doc_${doc._id}_${Date.now()}.json`;
-      const localFilePath = `/tmp/${fileName}`;
-      
-      // Create file locally first
-      fs.writeFileSync(localFilePath, JSON.stringify(payload, null, 2));
-      
-      // Copy to NIFI container using docker cp
-      const { execSync } = require('child_process');
-      execSync(`docker cp ${localFilePath} biar-nifi:/tmp/biar-documents/${fileName}`);
-      
-      // Clean up local file
-      fs.unlinkSync(localFilePath);
-      
-      this.logger.log(`Successfully sent document ${doc._id} to NIFI as ${fileName}`, 'sendToNifi');
-    } catch (error: any) {
-      this.logger.log(`Failed to send to NIFI: ${error.message}`, 'sendToNifi');
-    }
-  }
-
-  private async storeInOzone(doc: any, extractedText: string, metadata: any): Promise<void> {
-    const documentData = {
-      documentId: doc._id,
-      caseId: doc.CaseId || doc.caseId,
-      taskId: doc.TaskId || doc.taskId,
-      name: doc.Name || doc.name,
-      extractedText,
-      metadata,
-      processedAt: new Date().toISOString(),
-      source: 'biar-document-processor',
-      originalDocument: doc
-    };
-
-    try {
-      // Store file directly in Ozone's storage directory
-      const fs = require('fs');
-      const fileName = `processed_doc_${doc._id}_${Date.now()}.json`;
-      const localFilePath = `/tmp/${fileName}`;
-      
-      // Create file locally first
-      fs.writeFileSync(localFilePath, JSON.stringify(documentData, null, 2));
-      
-      // Copy to Ozone container storage
-      const { execSync } = require('child_process');
-      execSync(`docker cp ${localFilePath} biar-ozone:/data/ozone/processed/${fileName}`);
-      
-      // Clean up local file
-      fs.unlinkSync(localFilePath);
-
-      this.logger.log(`Stored document ${doc._id} in Ozone as ${fileName}`, 'storeInOzone');
-      
-      // Also store original attachments if needed
-      if (doc._attachments) {
-        for (const [filename, attachment] of Object.entries(doc._attachments)) {
-          await this.storeAttachmentInOzone(doc._id, filename, attachment as any);
-        }
-      }
-    } catch (error: any) {
-      this.logger.log(`Failed to store in Ozone: ${error.message}`, 'storeInOzone');
-      // Continue processing even if Ozone storage fails
-    }
-  }
-
-  private async storeAttachmentInOzone(docId: string, filename: string, attachment: any): Promise<void> {
-    try {
-      const attachmentResponse = await axios.get(
-        `${this.config.COUCHDB_URL}/biar_documents/${docId}/${filename}`,
-        { responseType: 'arraybuffer' }
-      );
-      
-      const objectKey = `original-documents/${docId}/${filename}`;
-      
-      await axios.put(
-        `${this.config.OZONE_URL}/s3v/${this.config.OZONE_VOLUME}/${this.config.OZONE_BUCKET}/${objectKey}`,
-        attachmentResponse.data,
-        {
-          headers: {
-            'Content-Type': attachment.content_type || 'application/octet-stream',
-            'Content-Length': attachment.length
-          },
-          timeout: 20000
-        }
-      );
-
-      this.logger.log(`Stored attachment ${filename} for document ${docId} in Ozone`, 'storeAttachmentInOzone');
-    } catch (error: any) {
-      this.logger.log(`Failed to store attachment ${filename}: ${error.message}`, 'storeAttachmentInOzone');
-    }
-  }
+  
 
   private async updateDocumentStatus(documentId: string, status: string, errorMessage?: string): Promise<void> {
     const currentDoc = await axios.get(`${this.config.COUCHDB_URL}/biar_documents/${documentId}`);
     
     const updatedDoc = {
       ...currentDoc.data,
-      processingStatus: status,
-      lastProcessed: new Date().toISOString(),
+      statuses: {processingStatus: status,
+      lastProcessed: new Date().toISOString()},
       ...(errorMessage && { lastError: errorMessage })
     };
 

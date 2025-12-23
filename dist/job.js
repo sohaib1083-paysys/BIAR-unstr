@@ -49,7 +49,7 @@ class DocumentProcessor {
         const processorConfig = (0, config_1.validateProcessorConfig)();
         this.logger = new frms_coe_lib_1.LoggerService(processorConfig);
         this.config = {
-            COUCHDB_URL: process.env.COUCHDB_URL || 'http://admin:password@localhost:5984',
+            COUCHDB_URL: process.env.COUCHDB_URL || 'http://admin:password@localhost:5984/cms-evidence',
             TIKA_URL: process.env.TIKA_URL || 'http://localhost:9998',
             SOLR_URL: process.env.SOLR_URL || 'http://localhost:8983/solr/biar_docs',
             NIFI_URL: process.env.NIFI_URL || 'http://localhost:8081',
@@ -74,7 +74,7 @@ class DocumentProcessor {
         }
     }
     async getAllDocumentsWithAttachments() {
-        const response = await axios_1.default.get(`${this.config.COUCHDB_URL}/biar_documents/_all_docs?include_docs=true`);
+        const response = await axios_1.default.get(`${this.config.COUCHDB_URL}/_all_docs?include_docs=true`);
         return response.data.rows
             .map((row) => row.doc)
             .filter((doc) => {
@@ -109,7 +109,7 @@ class DocumentProcessor {
         }
     }
     async extractText(docId, filename) {
-        const attachmentResponse = await axios_1.default.get(`${this.config.COUCHDB_URL}/biar_documents/${docId}/${filename}`, { responseType: 'arraybuffer' });
+        const attachmentResponse = await axios_1.default.get(`${this.config.COUCHDB_URL}/${docId}/${filename}`, { responseType: 'arraybuffer' });
         const fileBuffer = Buffer.from(attachmentResponse.data);
         const [text, metadata] = await Promise.all([
             this.callTika(fileBuffer, 'tika', 'text/plain'),
@@ -154,14 +154,14 @@ class DocumentProcessor {
         this.logger.log(`Indexed document ${doc._id} in Solr`, 'indexInSolr');
     }
     async updateDocumentStatus(documentId, status, errorMessage) {
-        const currentDoc = await axios_1.default.get(`${this.config.COUCHDB_URL}/biar_documents/${documentId}`);
+        const currentDoc = await axios_1.default.get(`${this.config.COUCHDB_URL}/${documentId}`);
         const updatedDoc = {
             ...currentDoc.data,
             statuses: { processingStatus: status,
                 lastProcessed: new Date().toISOString() },
             ...(errorMessage && { lastError: errorMessage })
         };
-        await axios_1.default.put(`${this.config.COUCHDB_URL}/biar_documents/${documentId}`, updatedDoc, { headers: { 'Content-Type': 'application/json' } });
+        await axios_1.default.put(`${this.config.COUCHDB_URL}/${documentId}`, updatedDoc, { headers: { 'Content-Type': 'application/json' } });
     }
 }
 if (require.main === module) {

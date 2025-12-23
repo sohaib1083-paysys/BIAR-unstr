@@ -27,7 +27,7 @@ class DocumentProcessor {
     this.logger = new LoggerService(processorConfig);
 
     this.config = {
-      COUCHDB_URL: process.env.COUCHDB_URL || 'http://admin:password@localhost:5984',
+      COUCHDB_URL: process.env.COUCHDB_URL || 'http://admin:password@localhost:5984/cms-evidence',
       TIKA_URL: process.env.TIKA_URL || 'http://localhost:9998',
       SOLR_URL: process.env.SOLR_URL || 'http://localhost:8983/solr/biar_docs',
       NIFI_URL: process.env.NIFI_URL || 'http://localhost:8081',
@@ -59,7 +59,7 @@ class DocumentProcessor {
   }
 
   private async getAllDocumentsWithAttachments(): Promise<any[]> {
-    const response = await axios.get(`${this.config.COUCHDB_URL}/biar_documents/_all_docs?include_docs=true`);
+    const response = await axios.get(`${this.config.COUCHDB_URL}/_all_docs?include_docs=true`);
     
     return response.data.rows
       .map((row: any) => row.doc)
@@ -112,7 +112,7 @@ class DocumentProcessor {
 
   private async extractText(docId: string, filename: string): Promise<{ text: string; metadata: any }> {
     const attachmentResponse = await axios.get(
-      `${this.config.COUCHDB_URL}/biar_documents/${docId}/${filename}`,
+      `${this.config.COUCHDB_URL}/${docId}/${filename}`,
       { responseType: 'arraybuffer' }
     );
     
@@ -184,7 +184,7 @@ class DocumentProcessor {
   
 
   private async updateDocumentStatus(documentId: string, status: string, errorMessage?: string): Promise<void> {
-    const currentDoc = await axios.get(`${this.config.COUCHDB_URL}/biar_documents/${documentId}`);
+    const currentDoc = await axios.get(`${this.config.COUCHDB_URL}/${documentId}`);
     
     const updatedDoc = {
       ...currentDoc.data,
@@ -194,7 +194,7 @@ class DocumentProcessor {
     };
 
     await axios.put(
-      `${this.config.COUCHDB_URL}/biar_documents/${documentId}`,
+      `${this.config.COUCHDB_URL}/${documentId}`,
       updatedDoc,
       { headers: { 'Content-Type': 'application/json' } }
     );

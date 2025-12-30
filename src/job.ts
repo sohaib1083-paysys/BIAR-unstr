@@ -32,6 +32,7 @@ class DocumentProcessor {
       SOLR_URL: process.env.SOLR_URL || 'http://localhost:8983/solr/biar_docs',
       NIFI_URL: process.env.NIFI_URL || 'http://localhost:8081',
     };
+    
   }
 
   async run(): Promise<void> {
@@ -95,7 +96,6 @@ class DocumentProcessor {
         metadata,
         extractedAt: new Date().toISOString()
       });
-
 
       
       await this.updateDocumentStatus(documentId, 'COMPLETED');

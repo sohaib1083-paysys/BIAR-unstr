@@ -2,14 +2,9 @@ import axios from 'axios';
 import { LoggerService } from '@tazama-lf/frms-coe-lib';
 import { validateProcessorConfig } from '@tazama-lf/frms-coe-lib/lib/config';
 import * as dotenv from 'dotenv';
+import { DocumentResult } from './types/types';
 
 dotenv.config();
-
-interface DocumentResult {
-  documentId: string;
-  success: boolean;
-  error?: string;
-}
 
 class DocumentProcessor {
   private logger: LoggerService;
@@ -20,6 +15,10 @@ class DocumentProcessor {
     NIFI_URL: string;
   };
 
+  // Configuration constants
+  private readonly MAX_FILE_SIZE_MB = 20; // Skip files larger than this
+  private readonly TIKA_TIMEOUT_MS = 120000; // 120 seconds
+
   constructor() {
     process.env.FUNCTION_NAME = process.env.FUNCTION_NAME || 'biar-document-processor';
     
@@ -27,7 +26,7 @@ class DocumentProcessor {
     this.logger = new LoggerService(processorConfig);
 
     this.config = {
-      COUCHDB_URL: process.env.COUCHDB_URL || 'http://admin:password@localhost:5984/cms-evidence',
+      COUCHDB_URL: process.env.COUCHDB_URL || 'http://localhost:5984/cms-evidence',
       TIKA_URL: process.env.TIKA_URL || 'http://localhost:9998',
       SOLR_URL: process.env.SOLR_URL || 'http://localhost:8983/solr/biar_docs',
       NIFI_URL: process.env.NIFI_URL || 'http://localhost:8081',
@@ -39,21 +38,28 @@ class DocumentProcessor {
     this.logger.log('Starting document processing job', 'DocumentProcessor');
     
     try {
+      
       const documents = await this.getAllDocumentsWithAttachments();
       this.logger.log(`Found ${documents.length} documents with attachments`, 'run');
 
       const results: DocumentResult[] = [];
+      let processedCount = 0;
       
       for (const doc of documents) {
+        processedCount++;
+        this.logger.log(`Processing document ${processedCount}/${documents.length}`, 'run');
+        
         const result = await this.processDocument(doc);
         results.push(result);
+        
+        // Log progress every 5 documents or on last document
+        if (processedCount % 5 === 0 || processedCount === documents.length) {
+          const currentSuccess = results.filter(r => r.success).length;
+          const currentErrors = results.filter(r => !r.success).length;
+          this.logger.log(`Progress: ${processedCount}/${documents.length} - Success: ${currentSuccess}, Errors: ${currentErrors}`, 'run');
+        }
       }
 
-      const successCount = results.filter(r => r.success).length;
-      const errorCount = results.filter(r => !r.success).length;
-      
-      this.logger.log(`Processing complete: ${successCount} success, ${errorCount} errors`, 'run');
-      
     } catch (error) {
       this.logger.error(`Job failed: ${(error as Error).message}`, error, 'run');
     }
@@ -65,9 +71,19 @@ class DocumentProcessor {
     return response.data.rows
       .map((row: any) => row.doc)
       .filter((doc: any) => {
-        const hasAttachments = doc._attachments && Object.keys(doc._attachments).length > 0 && doc.statuses?.processingStatus != 'COMPLETED';
+
+        if (!doc) {
+          return false;
+        }
         
-        return hasAttachments;
+        const hasAttachments = doc._attachments && Object.keys(doc._attachments).length > 0;
+        if (!hasAttachments) {
+          return false;
+        }
+        
+        const isNotCompleted = doc.statuses?.processingStatus !== 'COMPLETED';
+        
+        return hasAttachments && isNotCompleted;
       });
   }
 
@@ -81,10 +97,8 @@ class DocumentProcessor {
       
       const attachmentName = Object.keys(doc._attachments)[0];
       const { text, metadata } = await this.extractText(documentId, attachmentName);
-      // this.logger.log('The doc is ', doc)
-      // this.logger.log('The text is ', text)
-      // this.logger.log('The metadata is ', metadata)
 
+      this.logger.log(`Extracted text length: ${text.length} characters`, 'processDocument');
       
       await this.indexInSolr(doc, text, metadata);
 
@@ -105,12 +119,33 @@ class DocumentProcessor {
       
     } catch (error) {
       this.logger.error(`Failed to process ${documentId}: ${(error as Error).message}`, error, 'processDocument');
-      await this.updateDocumentStatus(documentId, 'ERROR', (error as Error).message);
-      return { documentId, success: false, error: (error as Error).message };
+      
+      // Determine status based on error type
+      const errorMessage = (error as Error).message;
+      const status = errorMessage.includes('File too large') ? 'SKIPPED_TOO_LARGE' : 'ERROR';
+      
+      await this.updateDocumentStatus(documentId, status, errorMessage);
+      return { documentId, success: false, error: errorMessage };
     }
   }
 
   private async extractText(docId: string, filename: string): Promise<{ text: string; metadata: any }> {
+    this.logger.log(`Extracting text from ${filename} (document: ${docId})`, 'extractText');
+    
+    // First, check file size via HEAD request (without downloading)
+    const headResponse = await axios.head(
+      `${this.config.COUCHDB_URL}/${docId}/${filename}`
+    );
+    
+    const contentLength = parseInt(headResponse.headers['content-length'] || '0');
+    const fileSizeMB = Math.round((contentLength / 1024 / 1024) * 100) / 100;
+    
+    
+    // Skip files larger than configured maximum
+    if (fileSizeMB > this.MAX_FILE_SIZE_MB) {
+      throw new Error(`File too large: ${fileSizeMB}MB exceeds maximum of ${this.MAX_FILE_SIZE_MB}MB`);
+    }
+    
     const attachmentResponse = await axios.get(
       `${this.config.COUCHDB_URL}/${docId}/${filename}`,
       { responseType: 'arraybuffer' }
@@ -123,22 +158,36 @@ class DocumentProcessor {
       this.callTika(fileBuffer, 'meta', 'application/json')
     ]);
 
+    this.logger.log(`Successfully extracted text from ${filename}`, 'extractText');
     return { text, metadata };
   }
 
   private async callTika(fileBuffer: Buffer, endpoint: string, acceptType: string): Promise<any> {
-    const response = await axios.put(`${this.config.TIKA_URL}/${endpoint}`, fileBuffer, {
-      headers: {
-        'Accept': acceptType,
-        'Content-Type': 'application/octet-stream',
-      },
-      timeout: 60000,
-    });
-    return response.data;
+    try {
+      const response = await axios.put(`${this.config.TIKA_URL}/${endpoint}`, fileBuffer, {
+        headers: {
+          'Accept': acceptType,
+          'Content-Type': 'application/octet-stream',
+        },
+        timeout: this.TIKA_TIMEOUT_MS,
+      });
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        if (error.code === 'ECONNABORTED') {
+          throw new Error(`Tika timeout after ${this.TIKA_TIMEOUT_MS / 1000}s calling ${endpoint}. File may be too large or Tika is overloaded.`);
+        }
+        if (error.code === 'ECONNREFUSED') {
+          throw new Error(`Cannot connect to Tika at ${this.config.TIKA_URL}. Is Tika running?`);
+        }
+      }
+      throw error;
+    }
   }
 
   private async sendToNiFi(payload: any): Promise<void> {
-    this.logger.log("The payload being sent is: ", payload)
+    this.logger.log(`Sending document ${payload.documentId} to NiFi`, 'sendToNiFi');
+    
     await axios.post(
       `${this.config.NIFI_URL}/contentListener`,
       payload,
@@ -148,13 +197,13 @@ class DocumentProcessor {
         },
         timeout: 30000
       }
-  );
+    );
 
-  this.logger.log(
-    `Sent document ${payload.documentId} to NiFi`,
-    'sendToNiFi'
-  );
-}
+    this.logger.log(
+      `Successfully sent document ${payload.documentId} to NiFi`,
+      'sendToNiFi'
+    );
+  }
 
 
   private async indexInSolr(doc: any, extractedText: string, metadata: any): Promise<void> {

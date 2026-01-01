@@ -16,7 +16,7 @@ class DocumentProcessor {
   };
 
   // Configuration constants
-  private readonly MAX_FILE_SIZE_MB = 20; // Skip files larger than this
+  private readonly MAX_FILE_SIZE_MB = 50; // Skip files larger than this
   private readonly TIKA_TIMEOUT_MS = 120000; // 120 seconds
 
   constructor() {

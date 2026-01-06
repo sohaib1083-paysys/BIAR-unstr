@@ -108,7 +108,7 @@ class DocumentProcessor {
         filename: attachmentName,
         content: text,
         metadata,
-        extractedAt: new Date().toISOString()
+        extractedAt: new Date().toISOString(),
       });
 
       
@@ -134,7 +134,7 @@ class DocumentProcessor {
     
     // First, check file size via HEAD request (without downloading)
     const headResponse = await axios.head(
-      `${this.config.COUCHDB_URL}/${docId}/${filename}`
+      `${this.config.COUCHDB_URL}/${docId}/${filename}`,
     );
     
     const contentLength = parseInt(headResponse.headers['content-length'] || '0');
@@ -148,14 +148,14 @@ class DocumentProcessor {
     
     const attachmentResponse = await axios.get(
       `${this.config.COUCHDB_URL}/${docId}/${filename}`,
-      { responseType: 'arraybuffer' }
+      { responseType: 'arraybuffer' },
     );
     
     const fileBuffer = Buffer.from(attachmentResponse.data);
     
     const [text, metadata] = await Promise.all([
       this.callTika(fileBuffer, 'tika', 'text/plain'),
-      this.callTika(fileBuffer, 'meta', 'application/json')
+      this.callTika(fileBuffer, 'meta', 'application/json'),
     ]);
 
     this.logger.log(`Successfully extracted text from ${filename}`, 'extractText');
@@ -193,15 +193,15 @@ class DocumentProcessor {
       payload,
       {
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        timeout: 30000
-      }
+        timeout: 30000,
+      },
     );
 
     this.logger.log(
       `Successfully sent document ${payload.documentId} to NiFi`,
-      'sendToNiFi'
+      'sendToNiFi',
     );
   }
 
@@ -217,14 +217,14 @@ class DocumentProcessor {
       uploadedAt: doc.UploadedAt || doc.uploadedAt,
       extractedAt: new Date().toISOString(),
       textLength: extractedText.length,
-      processingStatus: 'INDEXED'
+      processingStatus: 'INDEXED',
     };
 
 
     await axios.post(
       `${this.config.SOLR_URL}/update/json/docs?commit=true`,
       [solrDoc],
-      { headers: { 'Content-Type': 'application/json' } }
+      { headers: { 'Content-Type': 'application/json' } },
     );
     
     this.logger.log(`Indexed document ${doc._id} in Solr`, 'indexInSolr');
@@ -238,14 +238,14 @@ class DocumentProcessor {
     const updatedDoc = {
       ...currentDoc.data,
       statuses: {processingStatus: status,
-      lastProcessed: new Date().toISOString()},
-      ...(errorMessage && { lastError: errorMessage })
+        lastProcessed: new Date().toISOString()},
+      ...(errorMessage && { lastError: errorMessage }),
     };
 
     await axios.put(
       `${this.config.COUCHDB_URL}/${documentId}`,
       updatedDoc,
-      { headers: { 'Content-Type': 'application/json' } }
+      { headers: { 'Content-Type': 'application/json' } },
     );
   }
 }

@@ -1,0 +1,1 @@
+{"version":3,"file":"NiFiService.d.ts","sourceRoot":"","sources":["../../src/services/NiFiService.ts"],"names":[],"mappings":"AAEA,qBAAa,WAAW;IACtB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAA4B;IACnD,OAAO,CAAC,QAAQ,CAAC,OAAO,CAAS;IAEjC,OAAO;IAIP,MAAM,CAAC,WAAW,IAAI,WAAW;IAK3B,YAAY,CAAC,OAAO,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,GAAG,OAAO,CAAC,IAAI,CAAC;CAMpE"}

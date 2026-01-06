@@ -9,6 +9,7 @@ export interface EncryptionParams {
 export class DecryptionService {
   private static instance: DecryptionService | null = null;
 
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- Private constructor for singleton pattern
   private constructor() {}
 
   static getInstance(): DecryptionService {

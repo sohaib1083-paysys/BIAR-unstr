@@ -45,7 +45,7 @@ class DocumentProcessor {
     const allDocs = await this.couchdb.getAllDocs<IEvidenceDocument>(true);
     return allDocs.filter((doc) => 
       doc._attachments && 
-      doc.metadata?.length > 0 && 
+      doc.metadata && doc.metadata.length > 0 && 
       !doc.archive && 
       doc.processingStatus !== 'COMPLETED'
     );
@@ -62,10 +62,6 @@ class DocumentProcessor {
       const attachmentNames = Object.keys(doc._attachments ?? {});
       if (attachmentNames.length === 0) {
         throw new Error('No attachments found');
-      }
-
-      if (!doc.metadata || doc.metadata.length === 0) {
-        throw new Error('No metadata found');
       }
 
       const [attachmentName] = attachmentNames;
@@ -103,7 +99,7 @@ class DocumentProcessor {
         processingStatus: 'INDEXED',
       });
 
-      this.logger.log("Sent to solr")
+      this.logger.log('Sent to solr')
 
       await this.nifi.sendDocument({
         documentId: docId,
@@ -128,6 +124,7 @@ const processor = new DocumentProcessor();
 const cronSchedule = process.env.CRON_SCHEDULE ?? '*/5 * * * *';
 
 if (process.env.CRON_ENABLED === 'true') {
+  // eslint-disable-next-line no-console -- Log cron schedule on startup
   console.log(`Starting cron job with schedule: ${cronSchedule}`);
   cron.schedule(cronSchedule, () => {
     processor.run();

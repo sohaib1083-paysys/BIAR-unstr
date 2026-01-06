@@ -30,7 +30,7 @@ export interface IEvidenceDocument {
   evidenceType: string;
   description: string;
   archive: boolean;
-  metadata: IFileMetadata[];
+  metadata?: IFileMetadata[];
   _attachments?: Record<string, IAttachment>;
   processingStatus?: string;
   processedAt?: string;

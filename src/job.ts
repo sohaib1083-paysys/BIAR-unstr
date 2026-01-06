@@ -1,6 +1,7 @@
 import { LoggerService } from '@tazama-lf/frms-coe-lib';
 import { validateProcessorConfig } from '@tazama-lf/frms-coe-lib/lib/config';
 import * as dotenv from 'dotenv';
+import cron from 'node-cron';
 import { CouchDBService } from './services/CouchDBService';
 import { TikaService } from './services/TikaService';
 import { SolrService } from './services/SolrService';
@@ -42,7 +43,12 @@ class DocumentProcessor {
 
   private async getUnprocessedDocuments(): Promise<IEvidenceDocument[]> {
     const allDocs = await this.couchdb.getAllDocs<IEvidenceDocument>(true);
-    return allDocs.filter((doc) => doc._attachments && !doc.archive && doc.processingStatus !== 'COMPLETED');
+    return allDocs.filter((doc) => 
+      doc._attachments && 
+      doc.metadata?.length > 0 && 
+      !doc.archive && 
+      doc.processingStatus !== 'COMPLETED'
+    );
   }
 
   private async processDocument(doc: IEvidenceDocument): Promise<void> {
@@ -53,7 +59,16 @@ class DocumentProcessor {
     try {
       await this.couchdb.updateStatus(docId, 'PROCESSING');
 
-      const [attachmentName] = Object.keys(doc._attachments!);
+      const attachmentNames = Object.keys(doc._attachments ?? {});
+      if (attachmentNames.length === 0) {
+        throw new Error('No attachments found');
+      }
+
+      if (!doc.metadata || doc.metadata.length === 0) {
+        throw new Error('No metadata found');
+      }
+
+      const [attachmentName] = attachmentNames;
       const [fileMeta] = doc.metadata;
 
       if (fileMeta.fileSize > this.MAX_FILE_SIZE_MB * 1024 * 1024) {
@@ -69,33 +84,38 @@ class DocumentProcessor {
       const extraction = await this.tika.extract(fileBuffer);
       this.logger.log(`Content length: ${extraction.text.length}`)
 
-      // await this.solr.indexDocument({
-      //   id: docId,
-      //   evidenceId,
-      //   taskId,
-      //   evidenceType: doc.evidenceType,
-      //   fileName: fileMeta.fileName,
-      //   content: extraction.text,
-      //   contentType: fileMeta.mimeType,
-      //   uploadedAt: doc.uploadedAt,
-      //   extractedAt: new Date().toISOString(),
-      //   textLength: extraction.text.length,
-      //   processingStatus: 'INDEXED',
-      // });
+      const MAX_SOLR_CONTENT = 30000;
+      const contentForSolr = extraction.text.length > MAX_SOLR_CONTENT 
+        ? extraction.text.substring(0, MAX_SOLR_CONTENT) 
+        : extraction.text;
 
-      // this.logger.log("Sent to solr")
+      await this.solr.indexDocument({
+        id: docId,
+        evidenceId,
+        taskId,
+        evidenceType: doc.evidenceType,
+        fileName: fileMeta.fileName,
+        content: contentForSolr,
+        contentType: fileMeta.mimeType,
+        uploadedAt: doc.uploadedAt,
+        extractedAt: new Date().toISOString(),
+        textLength: extraction.text.length,
+        processingStatus: 'INDEXED',
+      });
 
-      // await this.nifi.sendDocument({
-      //   documentId: docId,
-      //   evidenceId,
-      //   taskId,
-      //   filename: fileMeta.fileName,
-      //   content: extraction.text,
-      //   metadata: extraction.metadata,
-      //   extractedAt: new Date().toISOString(),
-      // });
+      this.logger.log("Sent to solr")
 
-      // await this.couchdb.updateStatus(docId, 'COMPLETED');
+      await this.nifi.sendDocument({
+        documentId: docId,
+        evidenceId,
+        taskId,
+        filename: fileMeta.fileName,
+        content: extraction.text,
+        metadata: extraction.metadata,
+        extractedAt: new Date().toISOString(),
+      });
+
+      await this.couchdb.updateStatus(docId, 'COMPLETED');
     } catch (error) {
       const errorMsg = (error as Error).message;
       this.logger.error('Failed ' + docId + ': ' + errorMsg, error, 'process');
@@ -105,6 +125,15 @@ class DocumentProcessor {
 }
 
 const processor = new DocumentProcessor();
-processor.run();
+const cronSchedule = process.env.CRON_SCHEDULE ?? '*/5 * * * *';
+
+if (process.env.CRON_ENABLED === 'true') {
+  console.log(`Starting cron job with schedule: ${cronSchedule}`);
+  cron.schedule(cronSchedule, () => {
+    processor.run();
+  });
+} else {
+  processor.run();
+}
 
 export { DocumentProcessor };

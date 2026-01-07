@@ -31,7 +31,7 @@ Thumbs.db
 *.temp
 
 
-coverage
+coverage/
 
 dist/
 build/

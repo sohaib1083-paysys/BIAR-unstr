@@ -9,7 +9,7 @@ const config: Config.InitialOptions = {
   preset: 'ts-jest',
   testEnvironment: 'node',
 
-  roots: ['<rootDir>/test'],
+  roots: ['<rootDir>/__test__'],
 
   testMatch: ['**/*.spec.ts', '**/*.test.ts'],
 
@@ -20,9 +20,7 @@ const config: Config.InitialOptions = {
   setupFiles: ['dotenv/config'],
 
   collectCoverage: true,
-  collectCoverageFrom: [
-    'src/job.ts',
-  ],
+  collectCoverageFrom: ['src/job.ts'],
   coverageDirectory: '<rootDir>/coverage',
   coverageProvider: 'v8',
 

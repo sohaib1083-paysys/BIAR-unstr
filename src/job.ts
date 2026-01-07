@@ -1,7 +1,7 @@
 import { LoggerService } from '@tazama-lf/frms-coe-lib';
 import { validateProcessorConfig } from '@tazama-lf/frms-coe-lib/lib/config';
-import * as dotenv from 'dotenv';
 import cron from 'node-cron';
+import { additionalEnvironmentVariables, type Configuration } from './config';
 import { CouchDBService } from './services/CouchDBService';
 import { TikaService } from './services/TikaService';
 import { SolrService } from './services/SolrService';
@@ -9,24 +9,28 @@ import { NiFiService } from './services/NiFiService';
 import { DecryptionService } from './services/DecryptionService';
 import type { IEvidenceDocument } from './interfaces/iEvidenceDocument';
 
-dotenv.config();
+const BYTES_PER_KB = 1024;
+const BYTES_PER_MB = BYTES_PER_KB * BYTES_PER_KB;
+const FIRST_INDEX = 0;
 
 class DocumentProcessor {
   private readonly logger: LoggerService;
+  private readonly config: Configuration;
   private readonly couchdb: CouchDBService;
   private readonly tika: TikaService;
   private readonly solr: SolrService;
   private readonly nifi: NiFiService;
   private readonly decryption: DecryptionService;
-  private readonly MAX_FILE_SIZE_MB = 50;
 
   constructor() {
-    process.env.FUNCTION_NAME ??= 'biar-document-processor';
-    this.logger = new LoggerService(validateProcessorConfig());
-    this.couchdb = CouchDBService.getInstance();
-    this.tika = TikaService.getInstance();
-    this.solr = SolrService.getInstance();
-    this.nifi = NiFiService.getInstance();
+    this.config = validateProcessorConfig(
+      additionalEnvironmentVariables
+    ) as Configuration;
+    this.logger = new LoggerService(this.config);
+    this.couchdb = CouchDBService.getInstance(this.config);
+    this.tika = TikaService.getInstance(this.config);
+    this.solr = SolrService.getInstance(this.config);
+    this.nifi = NiFiService.getInstance(this.config);
     this.decryption = DecryptionService.getInstance();
   }
 
@@ -37,38 +41,48 @@ class DocumentProcessor {
         await this.processDocument(doc);
       }
     } catch (error) {
-      this.logger.error('Job failed: ' + (error as Error).message, error, 'run');
+      this.logger.error(
+        'Job failed: ' + (error as Error).message,
+        error,
+        'run'
+      );
     }
   }
 
   private async getUnprocessedDocuments(): Promise<IEvidenceDocument[]> {
     const allDocs = await this.couchdb.getAllDocs<IEvidenceDocument>(true);
-    return allDocs.filter((doc) => 
-      doc._attachments && 
-      doc.metadata && doc.metadata.length > 0 && 
-      !doc.archive && 
-      doc.processingStatus !== 'COMPLETED'
+    return allDocs.filter(
+      (doc) =>
+        doc._attachments &&
+        doc.metadata &&
+        doc.metadata.length > FIRST_INDEX &&
+        !doc.archive &&
+        doc.processingStatus !== 'COMPLETED'
     );
   }
 
   private async processDocument(doc: IEvidenceDocument): Promise<void> {
     const docId = doc._id;
-    const {evidenceId} = doc;
-    const {taskId} = doc;
+    const { evidenceId } = doc;
+    const { taskId } = doc;
 
     try {
       await this.couchdb.updateStatus(docId, 'PROCESSING');
 
       const attachmentNames = Object.keys(doc._attachments!);
-      if (attachmentNames.length === 0) {
+      if (attachmentNames.length === FIRST_INDEX) {
         throw new Error('No attachments found');
       }
 
       const [attachmentName] = attachmentNames;
       const [fileMeta] = doc.metadata!;
 
-      if (fileMeta.fileSize > this.MAX_FILE_SIZE_MB * 1024 * 1024) {
-        throw new Error('File too large: ' + Math.round(fileMeta.fileSize / 1024 / 1024) + 'MB');
+      if (fileMeta.fileSize > this.config.MAX_FILE_SIZE_MB * BYTES_PER_MB) {
+        throw new Error(
+          'File too large: ' +
+            Math.round(fileMeta.fileSize / BYTES_PER_MB) +
+            'MB'
+        );
       }
 
       let fileBuffer = await this.couchdb.getAttachment(docId, attachmentName);
@@ -76,14 +90,14 @@ class DocumentProcessor {
       if (fileMeta.encryption) {
         fileBuffer = this.decryption.decrypt(fileBuffer, fileMeta.encryption);
       }
-      
-      const extraction = await this.tika.extract(fileBuffer);
-      this.logger.log(`Content length: ${extraction.text.length}`)
 
-      const MAX_SOLR_CONTENT = 30000;
-      const contentForSolr = extraction.text.length > MAX_SOLR_CONTENT 
-        ? extraction.text.substring(0, MAX_SOLR_CONTENT) 
-        : extraction.text;
+      const extraction = await this.tika.extract(fileBuffer);
+      this.logger.log(`Content length: ${extraction.text.length}`);
+
+      const contentForSolr =
+        extraction.text.length > this.config.MAX_SOLR_CONTENT
+          ? extraction.text.substring(FIRST_INDEX, this.config.MAX_SOLR_CONTENT)
+          : extraction.text;
 
       await this.solr.indexDocument({
         id: docId,
@@ -99,7 +113,7 @@ class DocumentProcessor {
         processingStatus: 'INDEXED',
       });
 
-      this.logger.log('Sent to solr')
+      this.logger.log('Sent to solr');
 
       await this.nifi.sendDocument({
         documentId: docId,
@@ -122,9 +136,10 @@ class DocumentProcessor {
 
 const startProcessor = (): void => {
   const processor = new DocumentProcessor();
+  const cronEnabled = process.env.CRON_ENABLED === 'true';
   const cronSchedule = process.env.CRON_SCHEDULE ?? '*/5 * * * *';
 
-  if (process.env.CRON_ENABLED === 'true') {
+  if (cronEnabled) {
     cron.schedule(cronSchedule, () => {
       processor.run();
     });

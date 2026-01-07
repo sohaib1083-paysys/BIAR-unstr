@@ -20,9 +20,7 @@ const config: Config.InitialOptions = {
   setupFiles: ['dotenv/config'],
 
   collectCoverage: true,
-  collectCoverageFrom: [
-    'src/job.ts',
-  ],
+  collectCoverageFrom: ['src/job.ts'],
   coverageDirectory: '<rootDir>/coverage',
   coverageProvider: 'v8',
 

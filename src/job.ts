@@ -23,7 +23,9 @@ class DocumentProcessor {
   private readonly decryption: DecryptionService;
 
   constructor() {
-    this.config = validateProcessorConfig(additionalEnvironmentVariables) as Configuration;
+    this.config = validateProcessorConfig(
+      additionalEnvironmentVariables
+    ) as Configuration;
     this.logger = new LoggerService(this.config);
     this.couchdb = CouchDBService.getInstance(this.config);
     this.tika = TikaService.getInstance(this.config);
@@ -39,24 +41,30 @@ class DocumentProcessor {
         await this.processDocument(doc);
       }
     } catch (error) {
-      this.logger.error('Job failed: ' + (error as Error).message, error, 'run');
+      this.logger.error(
+        'Job failed: ' + (error as Error).message,
+        error,
+        'run'
+      );
     }
   }
 
   private async getUnprocessedDocuments(): Promise<IEvidenceDocument[]> {
     const allDocs = await this.couchdb.getAllDocs<IEvidenceDocument>(true);
-    return allDocs.filter((doc) => 
-      doc._attachments && 
-      doc.metadata && doc.metadata.length > FIRST_INDEX && 
-      !doc.archive && 
-      doc.processingStatus !== 'COMPLETED'
+    return allDocs.filter(
+      (doc) =>
+        doc._attachments &&
+        doc.metadata &&
+        doc.metadata.length > FIRST_INDEX &&
+        !doc.archive &&
+        doc.processingStatus !== 'COMPLETED'
     );
   }
 
   private async processDocument(doc: IEvidenceDocument): Promise<void> {
     const docId = doc._id;
-    const {evidenceId} = doc;
-    const {taskId} = doc;
+    const { evidenceId } = doc;
+    const { taskId } = doc;
 
     try {
       await this.couchdb.updateStatus(docId, 'PROCESSING');
@@ -70,7 +78,11 @@ class DocumentProcessor {
       const [fileMeta] = doc.metadata!;
 
       if (fileMeta.fileSize > this.config.MAX_FILE_SIZE_MB * BYTES_PER_MB) {
-        throw new Error('File too large: ' + Math.round(fileMeta.fileSize / BYTES_PER_MB) + 'MB');
+        throw new Error(
+          'File too large: ' +
+            Math.round(fileMeta.fileSize / BYTES_PER_MB) +
+            'MB'
+        );
       }
 
       let fileBuffer = await this.couchdb.getAttachment(docId, attachmentName);
@@ -78,13 +90,14 @@ class DocumentProcessor {
       if (fileMeta.encryption) {
         fileBuffer = this.decryption.decrypt(fileBuffer, fileMeta.encryption);
       }
-      
-      const extraction = await this.tika.extract(fileBuffer);
-      this.logger.log(`Content length: ${extraction.text.length}`)
 
-      const contentForSolr = extraction.text.length > this.config.MAX_SOLR_CONTENT 
-        ? extraction.text.substring(FIRST_INDEX, this.config.MAX_SOLR_CONTENT) 
-        : extraction.text;
+      const extraction = await this.tika.extract(fileBuffer);
+      this.logger.log(`Content length: ${extraction.text.length}`);
+
+      const contentForSolr =
+        extraction.text.length > this.config.MAX_SOLR_CONTENT
+          ? extraction.text.substring(FIRST_INDEX, this.config.MAX_SOLR_CONTENT)
+          : extraction.text;
 
       await this.solr.indexDocument({
         id: docId,
@@ -100,7 +113,7 @@ class DocumentProcessor {
         processingStatus: 'INDEXED',
       });
 
-      this.logger.log('Sent to solr')
+      this.logger.log('Sent to solr');
 
       await this.nifi.sendDocument({
         documentId: docId,

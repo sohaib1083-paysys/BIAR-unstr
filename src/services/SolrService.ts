@@ -15,8 +15,12 @@ export class SolrService {
   }
 
   async indexDocument(document: Record<string, unknown>): Promise<void> {
-    await axios.post(this.baseUrl + '/update/json/docs?commit=true', [document], {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    await axios.post(
+      this.baseUrl + '/update/json/docs?commit=true',
+      [document],
+      {
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
   }
 }

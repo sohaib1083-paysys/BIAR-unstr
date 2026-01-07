@@ -1,4 +1,5 @@
 # Environment variables (if they contain sensitive data)
+.env
 .env.local
 .env.production
 
@@ -30,7 +31,7 @@ Thumbs.db
 *.temp
 
 
-coverage/
+coverage
 
 dist/
 build/

@@ -1,17 +1,18 @@
 import axios from 'axios';
+import type { Configuration } from '../config';
 
 export class TikaService {
   private static instance: TikaService | null = null;
   private readonly baseUrl: string;
   private readonly timeout: number;
 
-  private constructor() {
-    this.baseUrl = process.env.TIKA_URL ?? 'http://localhost:9998';
-    this.timeout = 120000;
+  private constructor(config: Configuration) {
+    this.baseUrl = config.TIKA_URL;
+    this.timeout = config.TIKA_TIMEOUT;
   }
 
-  static getInstance(): TikaService {
-    TikaService.instance ??= new TikaService();
+  static getInstance(config: Configuration): TikaService {
+    TikaService.instance ??= new TikaService(config);
     return TikaService.instance;
   }
 
@@ -34,7 +35,7 @@ export class TikaService {
   }
 
   private async extractMetadata(fileBuffer: Buffer): Promise<Record<string, unknown>> {
-    const response = await axios.put(this.baseUrl + '/meta', fileBuffer, {
+    const response = await axios.put<Record<string, unknown>>(this.baseUrl + '/meta', fileBuffer, {
       headers: { Accept: 'application/json', 'Content-Type': 'application/octet-stream' },
       timeout: this.timeout,
     });

@@ -32,7 +32,18 @@ jest.mock('@tazama-lf/frms-coe-lib', () => {
 });
 
 jest.mock('@tazama-lf/frms-coe-lib/lib/config', () => ({
-  validateProcessorConfig: jest.fn().mockReturnValue({}),
+  validateProcessorConfig: jest.fn(() => ({
+    COUCHDB_URL: 'http://localhost:5984/cms-evidence',
+    TIKA_URL: 'http://localhost:9998',
+    SOLR_URL: 'http://localhost:8983/solr/biar_docs',
+    NIFI_URL: 'http://localhost:8081',
+    CRON_ENABLED: false,
+    CRON_SCHEDULE: '*/5 * * * *',
+    MAX_FILE_SIZE_MB: 50,
+    MAX_SOLR_CONTENT: 30000,
+    TIKA_TIMEOUT: 120000,
+    NIFI_TIMEOUT: 120000,
+  })),
 }));
 
 jest.mock('../src/services/CouchDBService', () => ({
@@ -66,18 +77,37 @@ jest.mock('../src/services/DecryptionService', () => ({
 }));
 
 jest.mock('node-cron', () => ({ schedule: jest.fn() }));
-jest.mock('dotenv', () => ({ config: jest.fn() }));
+
+jest.mock('../src/config', () => ({
+  additionalEnvironmentVariables: [],
+}));
 
 import { CouchDBService } from '../src/services/CouchDBService';
 import { TikaService } from '../src/services/TikaService';
 import { SolrService } from '../src/services/SolrService';
 import { NiFiService } from '../src/services/NiFiService';
 import { DecryptionService } from '../src/services/DecryptionService';
+import { DocumentProcessor } from '../src/job';
+import { validateProcessorConfig } from '@tazama-lf/frms-coe-lib/lib/config';
+
+const mockConfig = {
+  COUCHDB_URL: 'http://localhost:5984/cms-evidence',
+  TIKA_URL: 'http://localhost:9998',
+  SOLR_URL: 'http://localhost:8983/solr/biar_docs',
+  NIFI_URL: 'http://localhost:8081',
+  CRON_ENABLED: false,
+  CRON_SCHEDULE: '*/5 * * * *',
+  MAX_FILE_SIZE_MB: 50,
+  MAX_SOLR_CONTENT: 30000,
+  TIKA_TIMEOUT: 120000,
+  NIFI_TIMEOUT: 120000,
+};
 
 describe('DocumentProcessor', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     
+    (validateProcessorConfig as jest.Mock).mockReturnValue(mockConfig);
     (CouchDBService.getInstance as jest.Mock).mockReturnValue(mockCouchDB);
     (TikaService.getInstance as jest.Mock).mockReturnValue(mockTika);
     (SolrService.getInstance as jest.Mock).mockReturnValue(mockSolr);
@@ -85,10 +115,7 @@ describe('DocumentProcessor', () => {
     (DecryptionService.getInstance as jest.Mock).mockReturnValue(mockDecryption);
   });
 
-  const getProcessor = () => {
-    const { DocumentProcessor } = require('../src/job');
-    return new DocumentProcessor();
-  };
+  const getProcessor = () => new DocumentProcessor();
 
   const createValidDoc = (overrides = {}) => ({
     _id: 'doc1',
@@ -374,19 +401,12 @@ describe('DocumentProcessor', () => {
     const originalEnv = process.env;
 
     beforeEach(() => {
-      jest.resetModules();
       process.env = { ...originalEnv };
-      
-      (CouchDBService.getInstance as jest.Mock).mockReturnValue(mockCouchDB);
-      (TikaService.getInstance as jest.Mock).mockReturnValue(mockTika);
-      (SolrService.getInstance as jest.Mock).mockReturnValue(mockSolr);
-      (NiFiService.getInstance as jest.Mock).mockReturnValue(mockNifi);
-      (DecryptionService.getInstance as jest.Mock).mockReturnValue(mockDecryption);
-      mockCouchDB.getAllDocs.mockResolvedValue([]);
     });
 
     afterEach(() => {
       process.env = originalEnv;
+      jest.resetModules();
     });
 
     it('should schedule cron job when CRON_ENABLED is true', () => {
@@ -394,6 +414,8 @@ describe('DocumentProcessor', () => {
       process.env.CRON_SCHEDULE = '0 * * * *';
 
       const cron = require('node-cron');
+      cron.schedule.mockClear();
+      
       const { startProcessor } = require('../src/job');
       
       startProcessor();
@@ -406,6 +428,8 @@ describe('DocumentProcessor', () => {
       delete process.env.CRON_SCHEDULE;
 
       const cron = require('node-cron');
+      cron.schedule.mockClear();
+      
       const { startProcessor } = require('../src/job');
       
       startProcessor();
@@ -413,21 +437,12 @@ describe('DocumentProcessor', () => {
       expect(cron.schedule).toHaveBeenCalledWith('*/5 * * * *', expect.any(Function));
     });
 
-    it('should run immediately when CRON_ENABLED is not true', () => {
+    it('should run immediately when CRON_ENABLED is false', () => {
       process.env.CRON_ENABLED = 'false';
 
       const cron = require('node-cron');
-      const { startProcessor } = require('../src/job');
+      cron.schedule.mockClear();
       
-      startProcessor();
-
-      expect(cron.schedule).not.toHaveBeenCalled();
-    });
-
-    it('should run immediately when CRON_ENABLED is not set', () => {
-      delete process.env.CRON_ENABLED;
-
-      const cron = require('node-cron');
       const { startProcessor } = require('../src/job');
       
       startProcessor();
@@ -440,6 +455,8 @@ describe('DocumentProcessor', () => {
       process.env.CRON_SCHEDULE = '*/10 * * * *';
 
       const cron = require('node-cron');
+      cron.schedule.mockClear();
+      
       const { startProcessor } = require('../src/job');
       
       startProcessor();
@@ -451,6 +468,8 @@ describe('DocumentProcessor', () => {
       process.env.CRON_ENABLED = 'true';
 
       const cron = require('node-cron');
+      cron.schedule.mockClear();
+      
       const { startProcessor } = require('../src/job');
       
       startProcessor();

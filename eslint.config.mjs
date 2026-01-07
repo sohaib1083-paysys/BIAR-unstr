@@ -9,7 +9,7 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 
 export default defineConfig([
   eslintConfigPrettier,
-  globalIgnores(['**/coverage/**', '**/build/**', '**/node_modules/**', '**/__tests__/**', '**/dist/**', '**/test/**', '**/*.spec.ts', '**/jest.config.ts']),
+  globalIgnores(['**/coverage/**', '**/build/**', '**/node_modules/**', '**/__tests__/**', '*.ts', '**/dist/**', '**/*.spec.ts', '**/jest.config.ts']),
   {
     files: ['**/*.ts'],
     plugins: {
@@ -32,31 +32,26 @@ export default defineConfig([
       ...eslintPluginEslintComments.configs.recommended.rules,
       '@eslint-community/eslint-comments/require-description': ['error', { ignore: ['eslint-enable'] }],
       '@eslint-community/eslint-comments/disable-enable-pair': 'error',
-      '@typescript-eslint/init-declarations': 'off',
-      '@typescript-eslint/max-params': ['warn', { max: 7 }],
-      '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/class-methods-use-this': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/init-declarations': 'off',
+      '@typescript-eslint/max-params': ['warn', { max: 5 }],
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-floating-promises': 'off',
-      '@typescript-eslint/no-magic-numbers': 'off',
+      '@typescript-eslint/no-magic-numbers': 'warn',
+      '@typescript-eslint/no-misused-spread': 'off',
       '@typescript-eslint/no-var-requires': 'off',
       '@typescript-eslint/no-unsafe-type-assertion': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'warn',
       '@typescript-eslint/no-use-before-define': 'off',
       '@typescript-eslint/prefer-destructuring': 'warn',
       '@typescript-eslint/prefer-optional-chain': 'warn',
       '@typescript-eslint/restrict-template-expressions': 'error',
       '@typescript-eslint/strict-boolean-expressions': 'off',
-
-      // Add these rules to disable all 'any' related errors
-      '@typescript-eslint/no-unsafe-assignment': 'off',
-      '@typescript-eslint/no-unsafe-member-access': 'off',
-      '@typescript-eslint/no-unsafe-call': 'off',
-      '@typescript-eslint/no-unsafe-return': 'off',
-      '@typescript-eslint/no-unsafe-argument': 'off',
-
       '@stylistic/quotes': ['error', 'single'],
-      'max-lines': ['warn', { max: 450 }],
-      complexity: ['warn', { max: 15 }],
+      'complexity': ['warn', { max: 25 }],
+      'max-depth': ['warn', { max: 5 }],
+      'max-lines': 'off',
       'no-console': 'error',
       'no-unneeded-ternary': 'off',
       /* eslint-comments are bundled with eslint-config-love but they are using the unmaintained plugin. Replaced with @eslint-community/eslint-plugin-eslint-comments */

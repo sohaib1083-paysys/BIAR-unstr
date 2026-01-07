@@ -28,3 +28,12 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+
+coverage/
+
+dist/
+build/
+node_modules/
+.cache/
+npm-debug.log*

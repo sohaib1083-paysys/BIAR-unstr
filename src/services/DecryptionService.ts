@@ -8,9 +8,7 @@ export interface EncryptionParams {
 
 export class DecryptionService {
   private static instance: DecryptionService | null = null;
-
-  // eslint-disable-next-line @typescript-eslint/no-empty-function -- Private constructor for singleton pattern
-  private constructor() {}
+  private readonly algorithm = 'aes-256-gcm';
 
   static getInstance(): DecryptionService {
     DecryptionService.instance ??= new DecryptionService();
@@ -22,7 +20,7 @@ export class DecryptionService {
     const iv = Buffer.from(params.iv, 'base64');
     const authTag = Buffer.from(params.authTag, 'base64');
 
-    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    const decipher = createDecipheriv(this.algorithm, key, iv);
     decipher.setAuthTag(authTag);
 
     const decrypted = Buffer.concat([

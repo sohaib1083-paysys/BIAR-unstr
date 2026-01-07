@@ -59,13 +59,13 @@ class DocumentProcessor {
     try {
       await this.couchdb.updateStatus(docId, 'PROCESSING');
 
-      const attachmentNames = Object.keys(doc._attachments ?? {});
+      const attachmentNames = Object.keys(doc._attachments!);
       if (attachmentNames.length === 0) {
         throw new Error('No attachments found');
       }
 
       const [attachmentName] = attachmentNames;
-      const [fileMeta] = doc.metadata;
+      const [fileMeta] = doc.metadata!;
 
       if (fileMeta.fileSize > this.MAX_FILE_SIZE_MB * 1024 * 1024) {
         throw new Error('File too large: ' + Math.round(fileMeta.fileSize / 1024 / 1024) + 'MB');
@@ -120,17 +120,21 @@ class DocumentProcessor {
   }
 }
 
-const processor = new DocumentProcessor();
-const cronSchedule = process.env.CRON_SCHEDULE ?? '*/5 * * * *';
+const startProcessor = (): void => {
+  const processor = new DocumentProcessor();
+  const cronSchedule = process.env.CRON_SCHEDULE ?? '*/5 * * * *';
 
-if (process.env.CRON_ENABLED === 'true') {
-  // eslint-disable-next-line no-console -- Log cron schedule on startup
-  console.log(`Starting cron job with schedule: ${cronSchedule}`);
-  cron.schedule(cronSchedule, () => {
+  if (process.env.CRON_ENABLED === 'true') {
+    cron.schedule(cronSchedule, () => {
+      processor.run();
+    });
+  } else {
     processor.run();
-  });
-} else {
-  processor.run();
+  }
+};
+
+if (process.env.NODE_ENV !== 'test') {
+  startProcessor();
 }
 
-export { DocumentProcessor };
+export { DocumentProcessor, startProcessor };

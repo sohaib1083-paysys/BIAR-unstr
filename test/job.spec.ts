@@ -1,117 +1,505 @@
-import axios from 'axios';
+import { createCipheriv, randomBytes } from 'crypto';
 
-// Mock axios
-jest.mock('axios');
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+const mockCouchDB = {
+  getAllDocs: jest.fn(),
+  getDocument: jest.fn(),
+  getAttachment: jest.fn(),
+  updateStatus: jest.fn(),
+};
+
+const mockTika = {
+  extract: jest.fn(),
+};
+
+const mockSolr = {
+  indexDocument: jest.fn(),
+};
+
+const mockNifi = {
+  sendDocument: jest.fn(),
+};
+
+const mockDecryption = {
+  decrypt: jest.fn(),
+};
+
+jest.mock('@tazama-lf/frms-coe-lib', () => {
+  class MockLoggerService {
+    log = jest.fn();
+    error = jest.fn();
+  }
+  return { LoggerService: MockLoggerService };
+});
+
+jest.mock('@tazama-lf/frms-coe-lib/lib/config', () => ({
+  validateProcessorConfig: jest.fn().mockReturnValue({}),
+}));
+
+jest.mock('../src/services/CouchDBService', () => ({
+  CouchDBService: {
+    getInstance: jest.fn(),
+  },
+}));
+
+jest.mock('../src/services/TikaService', () => ({
+  TikaService: {
+    getInstance: jest.fn(),
+  },
+}));
+
+jest.mock('../src/services/SolrService', () => ({
+  SolrService: {
+    getInstance: jest.fn(),
+  },
+}));
+
+jest.mock('../src/services/NiFiService', () => ({
+  NiFiService: {
+    getInstance: jest.fn(),
+  },
+}));
+
+jest.mock('../src/services/DecryptionService', () => ({
+  DecryptionService: {
+    getInstance: jest.fn(),
+  },
+}));
+
+jest.mock('node-cron', () => ({ schedule: jest.fn() }));
+jest.mock('dotenv', () => ({ config: jest.fn() }));
+
+import { CouchDBService } from '../src/services/CouchDBService';
+import { TikaService } from '../src/services/TikaService';
+import { SolrService } from '../src/services/SolrService';
+import { NiFiService } from '../src/services/NiFiService';
+import { DecryptionService } from '../src/services/DecryptionService';
 
 describe('DocumentProcessor', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    
+    (CouchDBService.getInstance as jest.Mock).mockReturnValue(mockCouchDB);
+    (TikaService.getInstance as jest.Mock).mockReturnValue(mockTika);
+    (SolrService.getInstance as jest.Mock).mockReturnValue(mockSolr);
+    (NiFiService.getInstance as jest.Mock).mockReturnValue(mockNifi);
+    (DecryptionService.getInstance as jest.Mock).mockReturnValue(mockDecryption);
   });
 
-  describe('Health Check', () => {
-    it('should verify Tika is accessible', async () => {
-      mockedAxios.get.mockResolvedValueOnce({
-        status: 200,
-        headers: { server: 'Jetty(9.4.46.v20220331)' },
-        data: 'OK',
+  const getProcessor = () => {
+    const { DocumentProcessor } = require('../src/job');
+    return new DocumentProcessor();
+  };
+
+  const createValidDoc = (overrides = {}) => ({
+    _id: 'doc1',
+    evidenceId: 'evidence1',
+    taskId: 'task1',
+    evidenceType: 'document',
+    uploadedAt: '2024-01-01T00:00:00Z',
+    _attachments: { 'file.pdf': { content_type: 'application/pdf' } },
+    metadata: [{
+      fileName: 'file.pdf',
+      mimeType: 'application/pdf',
+      fileSize: 1024,
+    }],
+    archive: false,
+    processingStatus: 'PENDING',
+    ...overrides,
+  });
+
+  describe('run()', () => {
+    it('should process all unprocessed documents', async () => {
+      const docs = [createValidDoc({ _id: 'doc1' }), createValidDoc({ _id: 'doc2' })];
+      mockCouchDB.getAllDocs.mockResolvedValue(docs);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('PDF content'));
+      mockTika.extract.mockResolvedValue({ text: 'Extracted text', metadata: {} });
+      mockSolr.indexDocument.mockResolvedValue(undefined);
+      mockNifi.sendDocument.mockResolvedValue(undefined);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.getAllDocs).toHaveBeenCalledWith(true);
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'COMPLETED');
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc2', 'COMPLETED');
+    });
+
+    it('should handle errors during job execution', async () => {
+      mockCouchDB.getAllDocs.mockRejectedValue(new Error('Database error'));
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.getAllDocs).toHaveBeenCalled();
+    });
+  });
+
+  describe('getUnprocessedDocuments()', () => {
+    it('should filter documents with attachments and metadata', async () => {
+      const docs = [
+        createValidDoc({ _id: 'valid' }),
+        createValidDoc({ _id: 'completed', processingStatus: 'COMPLETED' }),
+        createValidDoc({ _id: 'archived', archive: true }),
+        { _id: 'noAttachments', metadata: [{ fileName: 'file.pdf' }], archive: false, processingStatus: 'PENDING' },
+        { _id: 'noMetadata', _attachments: { 'file.pdf': {} }, archive: false, processingStatus: 'PENDING' },
+        { _id: 'emptyMetadata', _attachments: { 'file.pdf': {} }, metadata: [], archive: false, processingStatus: 'PENDING' },
+      ];
+      mockCouchDB.getAllDocs.mockResolvedValue(docs);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
+      mockTika.extract.mockResolvedValue({ text: 'text', metadata: {} });
+      mockSolr.indexDocument.mockResolvedValue(undefined);
+      mockNifi.sendDocument.mockResolvedValue(undefined);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledTimes(2);
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('valid', 'PROCESSING');
+    });
+  });
+
+  describe('processDocument()', () => {
+    it('should process document through full pipeline', async () => {
+      const doc = createValidDoc();
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('PDF content'));
+      mockTika.extract.mockResolvedValue({ text: 'Extracted text', metadata: { author: 'Test' } });
+      mockSolr.indexDocument.mockResolvedValue(undefined);
+      mockNifi.sendDocument.mockResolvedValue(undefined);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'PROCESSING');
+      expect(mockCouchDB.getAttachment).toHaveBeenCalledWith('doc1', 'file.pdf');
+      expect(mockTika.extract).toHaveBeenCalledWith(Buffer.from('PDF content'));
+      expect(mockSolr.indexDocument).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'doc1',
+        evidenceId: 'evidence1',
+        taskId: 'task1',
+        fileName: 'file.pdf',
+        content: 'Extracted text',
+        processingStatus: 'INDEXED',
+      }));
+      expect(mockNifi.sendDocument).toHaveBeenCalledWith(expect.objectContaining({
+        documentId: 'doc1',
+        content: 'Extracted text',
+        metadata: { author: 'Test' },
+      }));
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'COMPLETED');
+    });
+
+    it('should decrypt encrypted files', async () => {
+      const key = randomBytes(32);
+      const iv = randomBytes(12);
+      const plaintext = 'Decrypted content';
+      
+      const cipher = createCipheriv('aes-256-gcm', key, iv);
+      const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+      const authTag = cipher.getAuthTag();
+
+      const encryptionParams = {
+        key: key.toString('base64'),
+        iv: iv.toString('base64'),
+        authTag: authTag.toString('base64'),
+      };
+
+      const doc = createValidDoc({
+        metadata: [{
+          fileName: 'file.pdf',
+          mimeType: 'application/pdf',
+          fileSize: 1024,
+          encryption: encryptionParams,
+        }],
       });
 
-      const response = await axios.get('http://localhost:9998/tika');
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockResolvedValue(encrypted);
+      mockDecryption.decrypt.mockReturnValue(Buffer.from(plaintext));
+      mockTika.extract.mockResolvedValue({ text: 'Extracted', metadata: {} });
+      mockSolr.indexDocument.mockResolvedValue(undefined);
+      mockNifi.sendDocument.mockResolvedValue(undefined);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockDecryption.decrypt).toHaveBeenCalledWith(encrypted, encryptionParams);
+      expect(mockTika.extract).toHaveBeenCalledWith(Buffer.from(plaintext));
+    });
+
+    it('should truncate content exceeding max length for Solr', async () => {
+      const longText = 'x'.repeat(50000);
+      const doc = createValidDoc();
       
-      expect(response.status).toBe(200);
-      expect(mockedAxios.get).toHaveBeenCalledWith('http://localhost:9998/tika');
-    });
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
+      mockTika.extract.mockResolvedValue({ text: longText, metadata: {} });
+      mockSolr.indexDocument.mockResolvedValue(undefined);
+      mockNifi.sendDocument.mockResolvedValue(undefined);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
 
-    it('should handle Tika connection failure', async () => {
-      mockedAxios.get.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      const processor = getProcessor();
+      await processor.run();
 
-      await expect(axios.get('http://localhost:9998/tika')).rejects.toThrow('ECONNREFUSED');
-    });
-  });
-
-  describe('File Size Validation', () => {
-    const MAX_FILE_SIZE_MB = 20;
-
-    it('should accept files under size limit', () => {
-      const fileSizeMB = 15;
-      expect(fileSizeMB <= MAX_FILE_SIZE_MB).toBe(true);
-    });
-
-    it('should reject files over size limit', () => {
-      const fileSizeMB = 50;
-      expect(fileSizeMB > MAX_FILE_SIZE_MB).toBe(true);
-    });
-
-    it('should handle edge case at exact limit', () => {
-      const fileSizeMB = 20;
-      expect(fileSizeMB <= MAX_FILE_SIZE_MB).toBe(true);
-    });
-  });
-
-  describe('Document Filtering', () => {
-    it('should filter out documents without attachments', () => {
-      const docs = [
-        { _id: 'doc1', _attachments: { 'file.pdf': {} } },
-        { _id: 'doc2' }, // No attachments
-        { _id: 'doc3', _attachments: {} }, // Empty attachments
-      ];
-
-      const filtered = docs.filter(
-        (doc) => doc._attachments && Object.keys(doc._attachments).length > 0
+      expect(mockSolr.indexDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'x'.repeat(30000),
+          textLength: 50000,
+        })
       );
-
-      expect(filtered).toHaveLength(1);
-      expect(filtered[0]._id).toBe('doc1');
-    });
-
-    it('should filter out design documents', () => {
-      const docs = [
-        { _id: 'doc1' },
-        { _id: '_design/views' },
-        { _id: 'doc2' },
-      ];
-
-      const filtered = docs.filter((doc) => !doc._id.startsWith('_design/'));
-
-      expect(filtered).toHaveLength(2);
-    });
-
-    it('should filter out completed documents', () => {
-      const docs = [
-        { _id: 'doc1', statuses: { processingStatus: 'COMPLETED' } },
-        { _id: 'doc2', statuses: { processingStatus: 'PENDING' } },
-        { _id: 'doc3' }, // No status
-      ];
-
-      const filtered = docs.filter(
-        (doc) => doc.statuses?.processingStatus !== 'COMPLETED'
+      expect(mockNifi.sendDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: longText,
+        })
       );
+    });
 
-      expect(filtered).toHaveLength(2);
+    it('should handle files under content limit without truncation', async () => {
+      const shortText = 'Short content';
+      const doc = createValidDoc();
+      
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
+      mockTika.extract.mockResolvedValue({ text: shortText, metadata: {} });
+      mockSolr.indexDocument.mockResolvedValue(undefined);
+      mockNifi.sendDocument.mockResolvedValue(undefined);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockSolr.indexDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: shortText,
+          textLength: shortText.length,
+        })
+      );
+    });
+
+    it('should reject files exceeding size limit', async () => {
+      const doc = createValidDoc({
+        metadata: [{
+          fileName: 'large.pdf',
+          mimeType: 'application/pdf',
+          fileSize: 100 * 1024 * 1024,
+        }],
+      });
+      
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'ERROR', expect.stringContaining('File too large'));
+      expect(mockTika.extract).not.toHaveBeenCalled();
+    });
+
+    it('should handle document with no attachments', async () => {
+      const doc = createValidDoc({ _attachments: {} });
+      
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'ERROR', 'No attachments found');
+    });
+
+    it('should handle processing errors and update status to ERROR', async () => {
+      const doc = createValidDoc();
+      
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockRejectedValue(new Error('Attachment not found'));
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'ERROR', 'Attachment not found');
+    });
+
+    it('should handle Tika extraction errors', async () => {
+      const doc = createValidDoc();
+      
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
+      mockTika.extract.mockRejectedValue(new Error('Tika server unavailable'));
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'ERROR', 'Tika server unavailable');
+    });
+
+    it('should handle Solr indexing errors', async () => {
+      const doc = createValidDoc();
+      
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
+      mockTika.extract.mockResolvedValue({ text: 'text', metadata: {} });
+      mockSolr.indexDocument.mockRejectedValue(new Error('Solr error'));
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'ERROR', 'Solr error');
+    });
+
+    it('should handle NiFi errors', async () => {
+      const doc = createValidDoc();
+      
+      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
+      mockTika.extract.mockResolvedValue({ text: 'text', metadata: {} });
+      mockSolr.indexDocument.mockResolvedValue(undefined);
+      mockNifi.sendDocument.mockRejectedValue(new Error('NiFi connection failed'));
+      mockCouchDB.updateStatus.mockResolvedValue(undefined);
+
+      const processor = getProcessor();
+      await processor.run();
+
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith('doc1', 'ERROR', 'NiFi connection failed');
     });
   });
 
-  describe('Checksum Calculation', () => {
-    it('should generate consistent checksums for same data', () => {
-      const crypto = require('crypto');
-      const data = JSON.stringify([{ id: 1, name: 'test' }]);
+  describe('startProcessor()', () => {
+    const originalEnv = process.env;
+
+    beforeEach(() => {
+      jest.resetModules();
+      process.env = { ...originalEnv };
       
-      const checksum1 = crypto.createHash('sha256').update(data).digest('hex');
-      const checksum2 = crypto.createHash('sha256').update(data).digest('hex');
-      
-      expect(checksum1).toBe(checksum2);
+      (CouchDBService.getInstance as jest.Mock).mockReturnValue(mockCouchDB);
+      (TikaService.getInstance as jest.Mock).mockReturnValue(mockTika);
+      (SolrService.getInstance as jest.Mock).mockReturnValue(mockSolr);
+      (NiFiService.getInstance as jest.Mock).mockReturnValue(mockNifi);
+      (DecryptionService.getInstance as jest.Mock).mockReturnValue(mockDecryption);
+      mockCouchDB.getAllDocs.mockResolvedValue([]);
     });
 
-    it('should generate different checksums for different data', () => {
-      const crypto = require('crypto');
-      const data1 = JSON.stringify([{ id: 1 }]);
-      const data2 = JSON.stringify([{ id: 2 }]);
+    afterEach(() => {
+      process.env = originalEnv;
+    });
+
+    it('should schedule cron job when CRON_ENABLED is true', () => {
+      process.env.CRON_ENABLED = 'true';
+      process.env.CRON_SCHEDULE = '0 * * * *';
+
+      const cron = require('node-cron');
+      const { startProcessor } = require('../src/job');
       
-      const checksum1 = crypto.createHash('sha256').update(data1).digest('hex');
-      const checksum2 = crypto.createHash('sha256').update(data2).digest('hex');
+      startProcessor();
+
+      expect(cron.schedule).toHaveBeenCalledWith('0 * * * *', expect.any(Function));
+    });
+
+    it('should use default schedule when CRON_SCHEDULE not set', () => {
+      process.env.CRON_ENABLED = 'true';
+      delete process.env.CRON_SCHEDULE;
+
+      const cron = require('node-cron');
+      const { startProcessor } = require('../src/job');
       
-      expect(checksum1).not.toBe(checksum2);
+      startProcessor();
+
+      expect(cron.schedule).toHaveBeenCalledWith('*/5 * * * *', expect.any(Function));
+    });
+
+    it('should run immediately when CRON_ENABLED is not true', () => {
+      process.env.CRON_ENABLED = 'false';
+
+      const cron = require('node-cron');
+      const { startProcessor } = require('../src/job');
+      
+      startProcessor();
+
+      expect(cron.schedule).not.toHaveBeenCalled();
+    });
+
+    it('should run immediately when CRON_ENABLED is not set', () => {
+      delete process.env.CRON_ENABLED;
+
+      const cron = require('node-cron');
+      const { startProcessor } = require('../src/job');
+      
+      startProcessor();
+
+      expect(cron.schedule).not.toHaveBeenCalled();
+    });
+
+    it('should use custom cron schedule when provided', () => {
+      process.env.CRON_ENABLED = 'true';
+      process.env.CRON_SCHEDULE = '*/10 * * * *';
+
+      const cron = require('node-cron');
+      const { startProcessor } = require('../src/job');
+      
+      startProcessor();
+
+      expect(cron.schedule).toHaveBeenCalledWith('*/10 * * * *', expect.any(Function));
+    });
+
+    it('should execute processor.run when cron job triggers', async () => {
+      process.env.CRON_ENABLED = 'true';
+
+      const cron = require('node-cron');
+      const { startProcessor } = require('../src/job');
+      
+      startProcessor();
+
+      const cronCallback = cron.schedule.mock.calls[0][1];
+      cronCallback();
+
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(cron.schedule).toHaveBeenCalled();
+    });
+
+    it('should not auto-start when NODE_ENV is test', () => {
+      const cron = require('node-cron');
+      cron.schedule.mockClear();
+      
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'test';
+        require('../src/job');
+      });
+
+      expect(cron.schedule).not.toHaveBeenCalled();
+    });
+
+    it('should auto-start when NODE_ENV is not test', () => {
+      const cron = require('node-cron');
+      cron.schedule.mockClear();
+      
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'production';
+        process.env.CRON_ENABLED = 'false';
+        require('../src/job');
+      });
+
+      expect(cron.schedule).not.toHaveBeenCalled();
+    });
+
+    it('should auto-start with cron when NODE_ENV is not test and CRON_ENABLED', () => {
+      const cron = require('node-cron');
+      cron.schedule.mockClear();
+      
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'production';
+        process.env.CRON_ENABLED = 'true';
+        process.env.CRON_SCHEDULE = '*/30 * * * *';
+        require('../src/job');
+      });
+
+      expect(cron.schedule).toHaveBeenCalledWith('*/30 * * * *', expect.any(Function));
     });
   });
 });

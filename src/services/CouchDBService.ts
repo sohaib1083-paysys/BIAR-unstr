@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { setTimeout as sleep } from 'timers/promises';
 
 export class CouchDBService {
   private static instance: CouchDBService | null = null;
@@ -32,16 +33,28 @@ export class CouchDBService {
     return Buffer.from(response.data);
   }
 
-  async updateStatus(documentId: string, status: string, errorMessage?: string): Promise<void> {
-    const currentDoc = await this.getDocument<Record<string, unknown>>(documentId);
-    const updatedDoc = {
-      ...currentDoc,
-      processingStatus: status,
-      processedAt: new Date().toISOString(),
-      ...(errorMessage && { lastError: errorMessage }),
-    };
-    await axios.put(this.baseUrl + '/' + documentId, updatedDoc, {
-      headers: { 'Content-Type': 'application/json' },
-    });
+  async updateStatus(documentId: string, status: string, errorMessage?: string, retries = 3): Promise<void> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const currentDoc = await this.getDocument<Record<string, unknown>>(documentId);
+        const updatedDoc = {
+          ...currentDoc,
+          processingStatus: status,
+          processedAt: new Date().toISOString(),
+          ...(errorMessage && { lastError: errorMessage }),
+        };
+        await axios.put(this.baseUrl + '/' + documentId, updatedDoc, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+        return;
+      } catch (error) {
+        const isConflict = axios.isAxiosError(error) && error.response?.status === 409;
+        if (isConflict && attempt < retries) {
+          await sleep(100 * attempt);
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 }

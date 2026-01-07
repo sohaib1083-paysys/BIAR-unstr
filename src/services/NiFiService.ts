@@ -16,7 +16,9 @@ export class NiFiService {
   async sendDocument(payload: Record<string, unknown>): Promise<void> {
     await axios.post(this.baseUrl + '/contentListener', payload, {
       headers: { 'Content-Type': 'application/json' },
-      timeout: 30000,
+      timeout: 120000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
     });
   }
 }

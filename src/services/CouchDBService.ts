@@ -2,8 +2,8 @@ import axios from 'axios';
 import { setTimeout as sleep } from 'timers/promises';
 import type { Configuration } from '../config';
 
-interface CouchDBAllDocsResponse<T> {
-  rows: Array<{ doc: T }>;
+interface CouchDBFindResponse<T> {
+  docs: T[];
 }
 
 const DEFAULT_RETRIES = 3;
@@ -23,16 +23,26 @@ export class CouchDBService {
     return CouchDBService.instance;
   }
 
-  async getAllDocs<T>(includeDocs = true): Promise<T[]> {
-    const response = await axios.get<CouchDBAllDocsResponse<T>>(
-      this.baseUrl + '/_all_docs',
+  async findUnprocessedDocs<T>(): Promise<T[]> {
+    const response = await axios.post<CouchDBFindResponse<T>>(
+      this.baseUrl + '/_find',
       {
-        params: { include_docs: includeDocs },
+        selector: {
+          $or: [
+            { processingStatus: { $exists: false } },
+            { processingStatus: { $ne: 'COMPLETED' } },
+          ],
+          archive: { $ne: true },
+          _attachments: { $exists: true },
+          'metadata.0': { $exists: true },
+        },
+        limit: 1000,
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
       }
     );
-    return response.data.rows
-      .map((row) => row.doc)
-      .filter((doc): doc is T => doc !== null);
+    return response.data.docs;
   }
 
   async getDocument<T>(documentId: string): Promise<T> {

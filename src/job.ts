@@ -11,7 +11,6 @@ import type { IEvidenceDocument } from './interfaces/iEvidenceDocument';
 
 const BYTES_PER_KB = 1024;
 const BYTES_PER_MB = BYTES_PER_KB * BYTES_PER_KB;
-const FIRST_INDEX = 0;
 
 class DocumentProcessor {
   private readonly logger: LoggerService;
@@ -36,7 +35,8 @@ class DocumentProcessor {
 
   async run(): Promise<void> {
     try {
-      const documents = await this.getUnprocessedDocuments();
+      const documents =
+        await this.couchdb.findUnprocessedDocs<IEvidenceDocument>();
       for (const doc of documents) {
         await this.processDocument(doc);
       }
@@ -49,18 +49,6 @@ class DocumentProcessor {
     }
   }
 
-  private async getUnprocessedDocuments(): Promise<IEvidenceDocument[]> {
-    const allDocs = await this.couchdb.getAllDocs<IEvidenceDocument>(true);
-    return allDocs.filter(
-      (doc) =>
-        doc._attachments &&
-        doc.metadata &&
-        doc.metadata.length > FIRST_INDEX &&
-        !doc.archive &&
-        doc.processingStatus !== 'COMPLETED'
-    );
-  }
-
   private async processDocument(doc: IEvidenceDocument): Promise<void> {
     const docId = doc._id;
     const { evidenceId } = doc;
@@ -70,7 +58,7 @@ class DocumentProcessor {
       await this.couchdb.updateStatus(docId, 'PROCESSING');
 
       const attachmentNames = Object.keys(doc._attachments!);
-      if (attachmentNames.length === FIRST_INDEX) {
+      if (attachmentNames.length === 0) {
         throw new Error('No attachments found');
       }
 
@@ -96,7 +84,7 @@ class DocumentProcessor {
 
       const contentForSolr =
         extraction.text.length > this.config.MAX_SOLR_CONTENT
-          ? extraction.text.substring(FIRST_INDEX, this.config.MAX_SOLR_CONTENT)
+          ? extraction.text.substring(0, this.config.MAX_SOLR_CONTENT)
           : extraction.text;
 
       await this.solr.indexDocument({
@@ -137,9 +125,11 @@ class DocumentProcessor {
 const startProcessor = (): void => {
   const processor = new DocumentProcessor();
   const cronEnabled = process.env.CRON_ENABLED === 'true';
-  const cronSchedule = process.env.CRON_SCHEDULE ?? '*/5 * * * *';
+  const cronSchedule = process.env.CRON_SCHEDULE ?? '*/5 * * * * *';
 
   if (cronEnabled) {
+    // eslint-disable-next-line no-console -- Startup log before logger is available externally
+    console.log(`Starting cron with schedule: ${cronSchedule}`);
     cron.schedule(cronSchedule, () => {
       processor.run();
     });

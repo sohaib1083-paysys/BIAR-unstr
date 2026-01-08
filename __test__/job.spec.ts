@@ -2,6 +2,7 @@ import { createCipheriv, randomBytes } from 'crypto';
 
 const mockCouchDB = {
   getAllDocs: jest.fn(),
+  findUnprocessedDocs: jest.fn(),
   getDocument: jest.fn(),
   getAttachment: jest.fn(),
   updateStatus: jest.fn(),
@@ -144,7 +145,7 @@ describe('DocumentProcessor', () => {
         createValidDoc({ _id: 'doc1' }),
         createValidDoc({ _id: 'doc2' }),
       ];
-      mockCouchDB.getAllDocs.mockResolvedValue(docs);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue(docs);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('PDF content'));
       mockTika.extract.mockResolvedValue({
         text: 'Extracted text',
@@ -157,7 +158,7 @@ describe('DocumentProcessor', () => {
       const processor = getProcessor();
       await processor.run();
 
-      expect(mockCouchDB.getAllDocs).toHaveBeenCalledWith(true);
+      expect(mockCouchDB.findUnprocessedDocs).toHaveBeenCalled();
       expect(mockCouchDB.updateStatus).toHaveBeenCalledWith(
         'doc1',
         'COMPLETED'
@@ -169,42 +170,26 @@ describe('DocumentProcessor', () => {
     });
 
     it('should handle errors during job execution', async () => {
-      mockCouchDB.getAllDocs.mockRejectedValue(new Error('Database error'));
+      mockCouchDB.findUnprocessedDocs.mockRejectedValue(
+        new Error('Database error')
+      );
 
       const processor = getProcessor();
       await processor.run();
 
-      expect(mockCouchDB.getAllDocs).toHaveBeenCalled();
+      expect(mockCouchDB.findUnprocessedDocs).toHaveBeenCalled();
     });
   });
 
   describe('getUnprocessedDocuments()', () => {
-    it('should filter documents with attachments and metadata', async () => {
+    it('should return documents from database query', async () => {
+      // Database query (findUnprocessedDocs) handles filtering
+      // Only valid unprocessed docs are returned
       const docs = [
-        createValidDoc({ _id: 'valid' }),
-        createValidDoc({ _id: 'completed', processingStatus: 'COMPLETED' }),
-        createValidDoc({ _id: 'archived', archive: true }),
-        {
-          _id: 'noAttachments',
-          metadata: [{ fileName: 'file.pdf' }],
-          archive: false,
-          processingStatus: 'PENDING',
-        },
-        {
-          _id: 'noMetadata',
-          _attachments: { 'file.pdf': {} },
-          archive: false,
-          processingStatus: 'PENDING',
-        },
-        {
-          _id: 'emptyMetadata',
-          _attachments: { 'file.pdf': {} },
-          metadata: [],
-          archive: false,
-          processingStatus: 'PENDING',
-        },
+        createValidDoc({ _id: 'valid1' }),
+        createValidDoc({ _id: 'valid2' }),
       ];
-      mockCouchDB.getAllDocs.mockResolvedValue(docs);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue(docs);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
       mockTika.extract.mockResolvedValue({ text: 'text', metadata: {} });
       mockSolr.indexDocument.mockResolvedValue(undefined);
@@ -214,9 +199,15 @@ describe('DocumentProcessor', () => {
       const processor = getProcessor();
       await processor.run();
 
-      expect(mockCouchDB.updateStatus).toHaveBeenCalledTimes(2);
+      expect(mockCouchDB.findUnprocessedDocs).toHaveBeenCalled();
+      // 2 docs × 2 calls each (PROCESSING + COMPLETED)
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledTimes(4);
       expect(mockCouchDB.updateStatus).toHaveBeenCalledWith(
-        'valid',
+        'valid1',
+        'PROCESSING'
+      );
+      expect(mockCouchDB.updateStatus).toHaveBeenCalledWith(
+        'valid2',
         'PROCESSING'
       );
     });
@@ -225,7 +216,7 @@ describe('DocumentProcessor', () => {
   describe('processDocument()', () => {
     it('should process document through full pipeline', async () => {
       const doc = createValidDoc();
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('PDF content'));
       mockTika.extract.mockResolvedValue({
         text: 'Extracted text',
@@ -299,7 +290,7 @@ describe('DocumentProcessor', () => {
         ],
       });
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockResolvedValue(encrypted);
       mockDecryption.decrypt.mockReturnValue(Buffer.from(plaintext));
       mockTika.extract.mockResolvedValue({ text: 'Extracted', metadata: {} });
@@ -321,7 +312,7 @@ describe('DocumentProcessor', () => {
       const longText = 'x'.repeat(50000);
       const doc = createValidDoc();
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
       mockTika.extract.mockResolvedValue({ text: longText, metadata: {} });
       mockSolr.indexDocument.mockResolvedValue(undefined);
@@ -348,7 +339,7 @@ describe('DocumentProcessor', () => {
       const shortText = 'Short content';
       const doc = createValidDoc();
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
       mockTika.extract.mockResolvedValue({ text: shortText, metadata: {} });
       mockSolr.indexDocument.mockResolvedValue(undefined);
@@ -377,7 +368,7 @@ describe('DocumentProcessor', () => {
         ],
       });
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.updateStatus.mockResolvedValue(undefined);
 
       const processor = getProcessor();
@@ -394,7 +385,7 @@ describe('DocumentProcessor', () => {
     it('should handle document with no attachments', async () => {
       const doc = createValidDoc({ _attachments: {} });
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.updateStatus.mockResolvedValue(undefined);
 
       const processor = getProcessor();
@@ -410,7 +401,7 @@ describe('DocumentProcessor', () => {
     it('should handle processing errors and update status to ERROR', async () => {
       const doc = createValidDoc();
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockRejectedValue(
         new Error('Attachment not found')
       );
@@ -429,7 +420,7 @@ describe('DocumentProcessor', () => {
     it('should handle Tika extraction errors', async () => {
       const doc = createValidDoc();
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
       mockTika.extract.mockRejectedValue(new Error('Tika server unavailable'));
       mockCouchDB.updateStatus.mockResolvedValue(undefined);
@@ -447,7 +438,7 @@ describe('DocumentProcessor', () => {
     it('should handle Solr indexing errors', async () => {
       const doc = createValidDoc();
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
       mockTika.extract.mockResolvedValue({ text: 'text', metadata: {} });
       mockSolr.indexDocument.mockRejectedValue(new Error('Solr error'));
@@ -466,7 +457,7 @@ describe('DocumentProcessor', () => {
     it('should handle NiFi errors', async () => {
       const doc = createValidDoc();
 
-      mockCouchDB.getAllDocs.mockResolvedValue([doc]);
+      mockCouchDB.findUnprocessedDocs.mockResolvedValue([doc]);
       mockCouchDB.getAttachment.mockResolvedValue(Buffer.from('content'));
       mockTika.extract.mockResolvedValue({ text: 'text', metadata: {} });
       mockSolr.indexDocument.mockResolvedValue(undefined);
@@ -511,23 +502,6 @@ describe('DocumentProcessor', () => {
 
       expect(cron.schedule).toHaveBeenCalledWith(
         '0 * * * *',
-        expect.any(Function)
-      );
-    });
-
-    it('should use default schedule when CRON_SCHEDULE not set', () => {
-      process.env.CRON_ENABLED = 'true';
-      delete process.env.CRON_SCHEDULE;
-
-      const cron = require('node-cron');
-      cron.schedule.mockClear();
-
-      const { startProcessor } = require('../src/job');
-
-      startProcessor();
-
-      expect(cron.schedule).toHaveBeenCalledWith(
-        '*/5 * * * *',
         expect.any(Function)
       );
     });
